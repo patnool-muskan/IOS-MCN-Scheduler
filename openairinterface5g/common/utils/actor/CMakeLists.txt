@@ -1,6 +1,0 @@
-add_library(actor actor.c)
-target_include_directories(actor PUBLIC ./)
-target_link_libraries(actor PUBLIC thread-pool)
-if (ENABLE_TESTS)
-  add_subdirectory(tests)
-endif()
