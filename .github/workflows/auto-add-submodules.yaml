@@ -1,0 +1,88 @@
+name: Auto update submodules
+
+on:
+  push:
+    branches:
+      - main  # Trigger when changes are pushed to the 'main' branch
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  update_submodules:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'true'  # This checks out the submodules as well
+        token: ${{ secrets.AUTO_TOKEN }}
+
+    - name: Debug Submodule State
+      run: |
+
+        echo "Submodule status before update:"
+        git submodule status
+        echo "Submodule logs:"
+        git submodule foreach 'git log -1'
+        echo "Checking for differences in .gitmodules:"
+        git diff .gitmodules || echo "No changes in .gitmodules"
+
+
+    - name: Set up Git with PAT for authentication
+      run: |
+
+        git config --global user.name "Ajeesh Jose"
+        git config --global user.email "joseajeesh@gmail.com"
+
+
+    - name: Update all submodules
+      run: |
+
+        git submodule foreach '
+          git fetch --all
+          # Detect the default branch dynamically
+          DEFAULT_BRANCH=$(git remote show origin | sed -n "/HEAD branch/s/.*: //p")
+          echo "Detected default branch: $DEFAULT_BRANCH"
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            echo "No default branch detected for submodule $name. Skipping..."
+          else
+            echo "Default branch for $name is $DEFAULT_BRANCH. Pulling changes..."
+            git checkout $DEFAULT_BRANCH
+            git pull origin $DEFAULT_BRANCH
+            echo "Submodule $name updated to latest commit: $(git log -1 --format=%H)"
+          fi
+        '
+        git submodule update --remote
+
+    - name: Commit and push submodule updates
+      run: |
+
+        git submodule foreach '
+          git fetch origin
+          DEFAULT_BRANCH=$(git remote show origin | sed -n "/HEAD branch/s/.*: //p")
+          echo "Detected default branch for submodule $name: $DEFAULT_BRANCH"
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            echo "Warning: No default branch for submodule $name. Skipping..."
+          else
+            if git branch -r | grep -q origin/"$DEFAULT_BRANCH"; then
+              git reset --hard origin/"$DEFAULT_BRANCH"
+              echo "Submodule $name updated to $(git rev-parse --short HEAD)"
+            else
+              echo "Warning: Submodule $name does not have a default branch $DEFAULT_BRANCH"
+            fi
+          fi
+        '
+        git add .gitmodules  # Stage the changes
+        git add -A           # Stage updates in submodules
+        if git diff --cached --quiet; then
+          echo "No changes to commit, submodules are already up-to-date"
+        else
+          echo "Submodule updates detected. Committing changes..."
+          git commit -m "Update all submodules to the released version of code" || echo "No commit created (possible issue)"
+          git push origin main || echo "Failed to push updates"
+        fi
+    - name: Debug Final State
+      run: |
+
+        echo "Final submodule state:"
+        git submodule status

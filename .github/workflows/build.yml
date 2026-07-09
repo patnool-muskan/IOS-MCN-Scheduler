@@ -1,0 +1,76 @@
+name: Build and Publish
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers the build when a tag starting with v is pushed to the code
+
+permissions:
+  contents: write
+
+jobs:
+  authcheck:
+    runs-on: ubuntu-22.04
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY:  ${{ github.repository_owner }}/
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.GH_TOKEN }}  # passes token to allow private submodule access
+
+  build:
+    runs-on: ubuntu-22.04
+    needs: authcheck
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true # Ensures access to private repo
+          submodules: recursive
+          token: ${{ secrets.GH_TOKEN }}  # passes token to allow private submodule access
+
+      - name: Clone repository (configure credentials)
+        run: |
+          echo "https://${{ secrets.GH_USER }}:${{ secrets.GH_TOKEN }}@github.com" > ~/.git-credentials
+          git config --global credential.helper store
+
+      - name: Install Dependencies
+        run: sudo apt update && sudo apt install -y build-essential
+
+      - name: Change the submodules link
+        run: |
+          git config --file .gitmodules submodule.openairinterface5g.url https://github.com/${{ github.repository_owner }}/openairinterface5g.git
+          git config --file .gitmodules submodule.o1-adapter.url https://github.com/${{ github.repository_owner }}/o1-adapter.git
+          git config --file .gitmodules submodule.phy.url https://github.com/${{ github.repository_owner }}/o-ran-sc-o-du-phy.git
+
+      - name: Update the submodules
+        run: ./build_ran --git-update
+
+      - name: Build and install the dependencies
+        run: ./build_ran --dependency
+
+      - name: Build the XRAN, O1-ADAPTER, and RAN
+        run: ./build_ran --all
+
+      - name: Clean the submodules to reduce the package size
+        run: |
+          ./build_ran --clean
+          rm -rf .gitmodules .gitignore .git/ # Removing git components as they are not required in release packages.
+
+      - name: Package the Binary with Tag
+        run: |
+          TAG_NAME=${{ github.ref_name }}
+          PACKAGE_NAME="ios-mcn-ran-dis-baremetal-${TAG_NAME}.tar.gz"
+          cd ../
+          tar -czvf "$PACKAGE_NAME" ios-mcn-ran
+          mv "$PACKAGE_NAME" ios-mcn-ran/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-mcn-ran-dis-baremetal-${{ github.ref_name }}
+          path: ios-mcn-ran-dis-baremetal-${{ github.ref_name }}.tar.gz

@@ -1,0 +1,85 @@
+services:
+    ios-mcn-cucp:
+        image: ghcr.io/${REPOSITORY}/ios-mcn-gnb-dis:${VERSION}
+        container_name: ios-mcn-cucp
+        cap_drop:
+            - ALL
+        environment:
+            USE_ADDITIONAL_OPTIONS: --log_config.global_log_options level,nocolor,time
+            ASAN_OPTIONS: detect_leaks=0
+        volumes:
+            - ../../conf/gnb-cucp.sa.f1-e1.iisc.conf:/opt/oai-gnb/etc/gnb.conf
+        network_mode: host
+        healthcheck:
+            test: /bin/bash -c "pgrep nr-softmodem"
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    ios-mcn-cuup:
+        image: ghcr.io/${REPOSITORY}/ios-mcn-cuup-dis:${VERSION}
+        container_name: ios-mcn-cuup
+        cap_drop:
+            - ALL
+        environment:
+            USE_ADDITIONAL_OPTIONS: --log_config.global_log_options level,nocolor,time
+            ASAN_OPTIONS: detect_leaks=0
+        depends_on:
+            - ios-mcn-cucp
+        network_mode: host
+        volumes:
+            - ../../conf/gnb-cuup.sa.f1-e1.iisc.conf:/opt/oai-gnb/etc/gnb.conf
+        healthcheck:
+            test: /bin/bash -c "pgrep nr-cuup"
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    ios-mcn-du:
+        image: ghcr.io/${REPOSITORY}/ios-mcn-gnb-dis:${VERSION}
+        container_name: ios-mcn-du
+        privileged: true
+        cap_drop:
+            - ALL
+        ulimits:
+          core: -1 # for core dumps
+        environment:
+            USE_B2XX: 'yes'
+            USE_ADDITIONAL_OPTIONS: --rfsim
+                                    --log_config.global_log_options level,nocolor,time,line_num,function
+        depends_on:
+            - ios-mcn-cucp
+            - ios-mcn-cuup
+        network_mode: host
+        volumes:
+            - ../../conf/gnb-du.sa.band78.106PRB.rfsim.conf:/opt/oai-gnb/etc/gnb.conf
+        healthcheck:
+            test: /bin/bash -c "pgrep nr-softmodem"
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    ios-mcn-nr-ue:
+        image: ghcr.io/${REPOSITORY}/ios-mcn-nr-ue-dis:${VERSION}
+        container_name: ios-mcn-nr-ue
+        cap_drop:
+            - ALL
+        cap_add:
+            - NET_ADMIN  # for interface bringup
+            - NET_RAW    # for ping
+        environment:
+            USE_ADDITIONAL_OPTIONS: --rfsim --log_config.global_log_options level,nocolor,time
+                                    -C 3619200000 -r 106 --numerology 1 --ssb 516
+                                    --rfsimulator.serveraddr 127.0.0.1
+        depends_on:
+            - ios-mcn-du
+        network_mode: host
+        devices:
+             - /dev/net/tun:/dev/net/tun
+        volumes:
+            - ../../conf/ue.sa.conf:/opt/oai-nr-ue/etc/nr-ue.conf
+        healthcheck:
+            test: /bin/bash -c "pgrep nr-uesoftmodem"
+            interval: 10s
+            timeout: 5s
+            retries: 5

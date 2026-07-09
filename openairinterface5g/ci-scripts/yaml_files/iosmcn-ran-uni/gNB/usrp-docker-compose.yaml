@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  gnb_mono_tdd:
+    image: ghcr.io/ios-mcn-ran/ran-gnb-uni:${TAG:-iosmcnmaster}
+    container_name: USRP-UNI.${TAG:-iosmcnmaster}
+    privileged: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+    ulimits:
+      core: -1
+    environment:
+      USE_B2XX: 'yes'
+      USE_ADDITIONAL_OPTIONS: >-
+        --RUs.[0].sdr_addrs serial=3441571
+        --continuous-tx
+        --log_config.global_log_options level,nocolor,time,line_num,function
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - /tmp/oai_trace_pipe:/tmp/oai_trace_pipe
+      - ../../conf_files/gNB/usrp-siso-40mhz.conf:/opt/oai-gnb/etc/gnb.conf
+    network_mode: "host"
+    command: >
+      /opt/oai-gnb/bin/nr-softmodem
+      -O /opt/oai-gnb/etc/gnb.conf
+      --sa
+      -E
+      --usrp-tx-thread-config 1
+      --thread-pool 3,4,5
+      
+    healthcheck:
+      test: /bin/bash -c "ps aux | grep -v grep | grep -c softmodem"
+      interval: 10s
+      timeout: 5s
+      retries: 5

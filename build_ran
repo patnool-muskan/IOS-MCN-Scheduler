@@ -1,0 +1,525 @@
+#!/bin/bash
+ROOT=$(pwd)
+
+# Include helper functions
+THIS_SCRIPT_PATH=$(dirname $(readlink -f "$0"))
+source "$THIS_SCRIPT_PATH"/scripts/build_helper
+source $THIS_SCRIPT_PATH/scripts/.env
+
+#sudo is not needed when we are root
+if [ "$UID" = 0 ]
+then
+  SUDO=''
+else
+  SUDO='sudo -S -E'
+fi
+
+# Function definitions
+git_submodule_update() {
+    # This command is used to build and update the git submodules automatically
+    git submodule init
+    git submodule update
+}
+
+build_o1_adapter_dependency_from_source() {
+    o1_adapter_dependency_log="$ROOT/log/o1_adapter_dependency_log.txt"
+    mkdir -p log
+    echo_info "Building o1-adapter dependencies from source. log for the same in: $o1_adapter_dependency_log"
+    (
+    source $ROOT/scripts/netconf_dep_install.sh 
+
+    $SUDO ldconfig
+    ) > $o1_adapter_dependency_log 2>&1
+    echo_success "Built o1-adapter dependency successfully!"
+}
+
+build_o1_adapter() {
+    o1_dir="$ROOT/o1-adapter"
+    if [[ ! -d "$o1_dir" || -z "$(ls -A "$o1_dir" 2>/dev/null)" ]]; then
+        echo_error "[o1-adapter] source code directory is missing or empty."
+        echo_info "Please obtain the o1-adapter source into: $o1_dir (for example: git clone <repo-url> $o1_dir) and re-run the script."
+        exit 1
+    fi
+    # Dependencies for o1-adapter
+    build_o1_adapter_dependency_from_source
+
+    # Build o1-adapter
+    source $ROOT/scripts/build_o1_adapter.sh
+    echo_success "Built O1 Adapter successfully!";
+}
+
+update_dependency() {
+    #Installing RAN specific dependencies
+    build_install_ran_dependency
+
+    #Installing o1-adapter specific dependencies
+    build_o1_adapter_dependency_from_source
+
+    echo_success "Dependencies installed!"
+}
+
+build_install_ran_dependency() {
+
+    ran_dependency_log="$ROOT/log/ran_dependency_log.txt"
+    echo_info "Installing RAN dependencies, log file for the same is in: $ran_dependency_log"
+    (
+    # Install RAN dependencies using the OAI build_helper modified script
+    check_install_oai_software
+
+    check_install_additional_tools
+    ) > $ran_dependency_log 2>&1
+    echo_success "RAN dependencies installed successfully!"
+}
+
+# TODO: Add checks to see if dpdk libraries are already installed - Safwan
+build_dpdk_from_source() {
+    
+    dpdk_build_log="$ROOT/log/dpdk_build_log.txt"
+    mkdir -p "log"
+    $SUDO apt-get install -y meson libnuma-dev tzdata build-essential git cmake pkg-config unzip wget libpcre2-dev zlib1g-dev libssl-dev autoconf libtool
+    $SUDO apt-get install -y --no-install-recommends psmisc openssl openssh-client vsftpd openssh-server
+
+    # Check if DPDK 20.11.9 is already installed
+    if pkg-config --exists libdpdk && pkg-config --modversion libdpdk | grep -q "^20\.11\.9"; then
+        echo_info "DPDK 20.11.9 is already installed. Skipping build."
+        return 0
+    fi
+
+    if [[ ! -f "dpdk-20.11.9.tar.xz" && ! -d "dpdk-stable-20.11.9" ]]; then
+        wget http://fast.dpdk.org/rel/dpdk-20.11.9.tar.xz
+    fi
+    echo_info "Building dpdk-20.11.9 from source, log file is in: $dpdk_build_log"
+    (
+    if [[ ! -d "dpdk-stable-20.11.9" ]]; then
+        tar -xvf dpdk-20.11.9.tar.xz
+        rm -rf dpdk-20.11.9.tar.xz
+    fi
+	cd dpdk-stable-20.11.9 && meson build && ninja -C build && $SUDO ninja install -C build # TODO: To be checked again. 
+    ) > $dpdk_build_log 2>&1
+    echo_success "Built dpdk-20.11.9 from source successfully!"
+
+}
+
+build_xran_from_source() {
+        
+    if [[ ! -d "$ROOT/phy" || -z "$(ls -A "$ROOT/phy")" ]]; then
+        echo_error "[XRAN] phy source code directory is missing or empty."
+        exit 1
+    fi
+
+    # Check and instal DPDK required for building FHI interface
+    build_dpdk_from_source
+    
+    xran_install_log="$ROOT/log/xran_install_log.txt"
+    echo_info "\n[XRAN] Installing XRAN, log file for XRAN installation is in: $xran_install_log "
+    (
+    pushd "$ROOT/phy"
+    # Check if current directory is a git repository
+    if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+        git restore .
+    else
+        echo_info "[XRAN] Not a git repository, skipping restore and patch."
+    fi
+
+    # Check if patch is already applied
+    if git apply --check "$OAI_XRAN_PATCH_DIR/oaioran_E.patch" > /dev/null 2>&1; then
+        git apply "$OAI_XRAN_PATCH_DIR/oaioran_E.patch"
+    else
+        echo_info "[XRAN] Patch $OAI_XRAN_PATCH_DIR/oaioran_E.patch already applied or cannot be applied cleanly."
+    fi
+    popd 
+
+    cd $ROOT/phy/fhi_lib
+    find ./lib -name '*.h' -exec $SUDO install -D {} $XRAN_INSTALL_DIR/{} \;
+    if [ $? -ne 0 ]; then
+        echo_error "[XRAN] Failed to install header files from ./lib to $XRAN_INSTALL_DIR."
+        exit 1
+    fi
+    find ./app -name '*.h' -exec $SUDO install -D {} $XRAN_INSTALL_DIR/{} \;
+    if [ $? -ne 0 ]; then
+        echo_error "[XRAN] Failed to install header files from ./app to $XRAN_INSTALL_DIR."
+        exit 1
+    fi
+    echo_success "[XRAN] Header files installed successfully in $XRAN_INSTALL_DIR."
+
+    # # Check if XRAN is already built and installed.
+    # if [[ -f "$XRAN_INSTALL_DIR/lib/build/libxran.so" ]]; then
+    #     echo_info "[XRAN] libxran.so already exists in $XRAN_INSTALL_DIR. Skipping XRAN build."
+    #     return 0
+    # fi
+    
+    pushd $XRAN_DIR/lib 
+    XRAN_DIR=$XRAN_DIR RTE_SDK=$RTE_SDK make clean 
+    XRAN_DIR=$XRAN_DIR RTE_SDK=$RTE_SDK make XRAN_LIB_SO=1
+    # if [[ -d "$XRAN_INSTALL_DIR" && -f "$XRAN_INSTALL_DIR/lib/build/libxran.so" ]]; then
+    #     $SUDO rm -rf "$XRAN_INSTALL_DIR"
+    # fi
+    $SUDO install -D $XRAN_LIB_DIR/build/libxran.so $XRAN_INSTALL_DIR/lib/build/libxran.so
+    if [ $? -ne 0 ]; then
+        echo_error "Failed to install libxran.so to $XRAN_INSTALL_DIR."
+        exit 1
+    fi
+    $SUDO install -D $XRAN_LIB_DIR/build/libxran.so $XRAN_LOCAL_INSTALL_DIR/lib/build/libxran.so
+    if [ $? -ne 0 ]; then
+        echo_error "[XRAN] Failed to install libxran.so to $XRAN_LOCAL_INSTALL_DIR."
+        exit 1
+    fi
+    ) > $xran_install_log 2>&1
+
+    if ldd $XRAN_INSTALL_DIR/lib/build/libxran.so > /dev/null 2>&1; then
+        echo_success "[XRAN] libxran.so is installed in $XRAN_INSTALL_DIR."
+    else
+        cat $xran_install_log
+        echo_error "[XRAN] libxran.so is not installed in $XRAN_INSTALL_DIR or is missing dependencies."
+        exit 1
+    fi
+    echo_success "[XRAN] Built XRAN successfully!"
+}
+
+## !! Requires sudo
+build_uhd_from_source() {
+    # Locate libuhd.so
+
+    # checking if UHD is already installed
+    if ldconfig -p | grep -q "libuhd.so"; then
+        echo "UHD is already installed."
+        return 0
+    else
+        echo "UHD not found. Proceeding with installation..."
+    fi
+
+    # Installing dependencies required for libuhd.so
+    $SUDO apt install libboost-all-dev
+    $SUDO apt install python3-pip
+    pip3 install mako
+    
+    [ -d "uhd" ] || git clone https://github.com/EttusResearch/uhd.git
+    
+    # !! TO DO:
+    # should handle the case of building in another system, since the CMAKE directory structure changes. 
+    cd uhd && \
+     git checkout v4.4.0.0 && \
+     cd host && mkdir -p build && \
+     cd build && cmake -DCMAKE_INSTALL_PREFIX=/usr/local ../ && \
+     make -j$(nproc) && make test 
+    
+    $SUDO make install &&  $SUDO ldconfig
+
+    $SUDO uhd_images_downloader
+}
+
+build_ran_from_source() {
+
+    echo_info "Building RAN for split 7.2, split 8 including CU-UP."
+
+    # Check if XRAN header files are installed
+    if ! find /usr/local/lib/xran -name "xran_*.h" > /dev/null 2>&1; then
+        echo_info "XRAN header files not found. Building and installing XRAN..."
+        build_xran_from_source
+    else
+        echo_info "XRAN header files already installed."
+    fi
+
+    $OAI_DIR/cmake_targets/build_oai --gNB --nrUE --ninja \
+        -t oran_fhlib_5g_mplane \
+        --noavx512 --cmake-opt -Dxran_LOCATION=$XRAN_INSTALL_DIR/lib \
+	    --cmake-opt -DOAI_FHI72_USE_POLLING=ON \
+        --build-lib "telnetsrv" --cmake-opt -DASN1C_EXEC=/opt/asn1c/bin/asn1c
+
+    if [ $? -ne 0 ]; then
+        echo_error "build_oai failed!"
+        exit 1
+    fi
+
+    # Check if building for split 8 and USRP is required
+    if [ "$SPLIT8" = "1" ]; then
+        echo_info "Building RAN for split 8 with USRP support..."
+        
+        # Check if libuhd.so is installed
+        if ! ldconfig -p | grep -q "libuhd.so"; then
+            echo_info "libuhd.so not found. Building and installing UHD..."
+            build_uhd_from_source
+        else
+            echo_info "libuhd.so already installed."
+        fi
+        
+        $OAI_DIR/cmake_targets/build_oai -w USRP 
+        
+        if [ $? -ne 0 ]; then
+            echo_error "build_oai failed for split 8!"
+            exit 1
+        fi
+    fi
+
+    $SUDO install -D $OAI_BUILD_DIR/nr-* $ROOT/build/bin/
+    if [ $? -ne 0 ]; then
+        echo_error "Install of nr-* binaries failed!"
+        exit 1
+    fi
+
+    $SUDO install -D $OAI_BUILD_DIR/*.so $ROOT/build/lib/
+    if [ $? -ne 0 ]; then
+        echo_error "Install of .so libraries failed!"
+        exit 1
+    fi
+    echo_success "Built RAN FHI72!"
+}
+
+build_e2_agent() {
+    # Install SWIG
+    swig_install_log="$ROOT/log/swig_install_log.txt"
+    echo_info "Building and installing SWIG from source. log file for SWIG installation is in: $swig_install_log "
+    (
+    [ -d "swig" ] || git clone https://github.com/swig/swig.git 
+
+    mkdir -p $ROOT/build/flexric
+    $SUDO apt-get install -y gcc-12 g++-12
+
+    cd swig && \
+    git checkout release-4.1  && \
+    ./autogen.sh && \
+    ./configure --prefix=/usr/ && \
+    make -j8 && \
+    $SUDO make install
+    ) > $swig_install_log 2>&1
+    echo_success "Built and installed SWIG successfully!"
+
+    echo_info "Building RAN with E2 interface."
+
+    $OAI_DIR/cmake_targets/build_oai --gNB --nrUE --ninja \
+    	--build-e2
+
+    flexric_build_log="$ROOT/log/flexric_build_log.txt"
+    echo_info "Building FlexRIC for SM Models. log file for FlexRIC build is in: $flexric_build_log "
+    (
+    ## Build FlexRIC for SM Models
+    mkdir -p $OAI_DIR/openair2/E2AP/flexric/build && \
+    cd $OAI_DIR/openair2/E2AP/flexric/build && \
+    cmake -GNinja -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_SKIP_BUILD_RPATH=FALSE \
+          -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+          -DKPM_VERSION=$KPM_VERSION \
+          -DE2AP_VERSION=$E2AP_VERSION \
+          -DCMAKE_C_COMPILER=gcc-12 \
+          -DCMAKE_CXX_COMPILER=g++-12 .. && \
+    ninja && \
+    $SUDO ninja install
+
+    $SUDO install -D /usr/local/lib/flexric/* $ROOT/build/flexric/
+    ) > $flexric_build_log 2>&1
+    echo_success "Built FlexRIC successfully!"
+
+    if [ $? -ne 0 ]; then
+        echo_error "build_oai failed!"
+        exit 1
+    fi
+
+    $SUDO install -D $OAI_BUILD_DIR/nr-* $ROOT/build/bin/
+    if [ $? -ne 0 ]; then
+        echo_error "Install of nr-* binaries failed!"
+        exit 1
+    fi
+}
+
+install_files() {
+    # Install binaries
+    if [[ -d "$ROOT/build/bin" ]]; then
+        echo_info "Installing binaries from $ROOT/build/bin to $BINDIR"
+        echo_info "Binaries to install:"
+        ls "$ROOT/build/bin"
+        $SUDO install -D $ROOT/build/bin/* $BINDIR
+    else
+        echo_info "No binaries found in $ROOT/build/bin, skipping."
+    fi
+
+    # Install libraries
+    if [[ -d "$ROOT/build/lib" ]]; then
+        echo_info "Installing libraries from $ROOT/build/lib to $LIBDIR"
+        echo_info "Libraries to install:"
+        ls "$ROOT/build/lib"
+        $SUDO install -D $ROOT/build/lib/* $LIBDIR
+    else
+        echo_info "No libraries found in $ROOT/build/lib, skipping."
+    fi
+
+    # Install XRAN library
+    if [[ -f "$ROOT/build/xran/lib/build/libxran.so" ]]; then
+        echo_info "Installing XRAN library to $XRAN_INSTALL_DIR/lib/build/libxran.so"
+        echo_info "XRAN library to install: $ROOT/build/xran/lib/build/libxran.so"
+        $SUDO install -D $ROOT/build/xran/lib/build/libxran.so $XRAN_INSTALL_DIR/lib/build/libxran.so
+    else
+        echo_info "XRAN library not found at $ROOT/build/xran/lib/build/libxran.so, skipping."
+    fi
+
+    # Install FlexRIC libraries
+    if [[ -d "$ROOT/build/flexric" ]] && compgen -G "$ROOT/build/flexric/*.so" > /dev/null; then
+        echo_info "Installing FlexRIC libraries from $ROOT/build/flexric to $LIBDIR/flexric/"
+        echo_info "FlexRIC libraries to install:"
+        ls "$ROOT/build/flexric"/*.so
+        $SUDO mkdir -p $LIBDIR/flexric
+        $SUDO install -D $ROOT/build/flexric/*.so $LIBDIR/flexric/
+    else
+        echo_info "No FlexRIC libraries (.so) found in $ROOT/build/flexric, skipping."
+    fi
+    $SUDO ldconfig
+    echo_success "Installation completed!"
+}
+
+uninstall_files() {
+    # List of binaries to remove
+    BINARIES=(
+        "nr-softmodem"
+        "nr-cuup"
+        "nr-uesoftmodem"
+        "gnb-adapter"
+    )
+
+    # List of libraries to remove (without $LIBDIR)
+    LIBRARIES=(
+        "libcoding.so"
+        "libldpc_optim.so"
+        "liboai_device.so"
+        "liboran_fhlib_5g.so"
+        "liboran_fhlib_5g_mplane.so"
+        "librfsimulator.so"
+        "libtelnetsrv_ci.so"
+        "libtelnetsrv_o1.so"
+        "libdfts.so"
+        "libldpc_orig.so"
+        "liboai_transpro.so"
+        "libparams_libconfig.so"
+        "libtelnetsrv_5Gue.so"
+        "libtelnetsrv_ciUE.so"
+        "libtelnetsrv_rrc.so"
+        "libldpc_optim8seg.so"
+        "libldpc.so"
+        "liboai_usrpdevif.so"
+        "libparams_yaml.so"
+        "libtelnetsrv_bearer.so"
+        "libtelnetsrv_enb.so"
+        "libtelnetsrv.so"
+    )
+
+    echo_info "Uninstalling RAN and o1-adapter libraries and binaries from $BINDIR and $LIBDIR"
+    # Remove binaries
+    for bin in "${BINARIES[@]}"; do
+        $SUDO rm -rf "$BINDIR/$bin"
+    done
+
+    # Remove libraries
+    for lib in "${LIBRARIES[@]}"; do
+        $SUDO rm -rf "$LIBDIR/$lib"
+    done
+
+    $SUDO rm -rf /usr/local/lib/xran
+    $SUDO rm -rf /usr/local/lib/flexric/
+    $SUDO ldconfig
+    echo_success "Uninstallation successful!"
+}
+
+clean_files(){
+    $SUDO rm -rf cJSON/ curl/ libnetconf2/  libssh/ libtelnet/ libyang/ netopeer2/ sysrepo/ swig/
+    $SUDO rm -rf dpdk-stable-20.11.9 
+    $SUDO rm -rf uhd
+    $SUDO rm -rf log
+    cd $ROOT/phy && git restore . && $SUDO rm -rf fhi_lib/lib/build && cd $ROOT
+    $SUDO -u $(whoami) git submodule deinit -f --all
+    echo_success "Cleaned the build"
+}
+
+build_dirs() {
+    if [[ ! -d build/bin ]]; then
+        mkdir -p $ROOT/build/bin
+    fi
+    if [[ ! -d build/lib ]]; then
+        mkdir -p $ROOT/build/lib
+    fi
+    if [[ ! -d log ]]; then
+        mkdir -p $ROOT/log
+    fi
+    echo_info "Checked and created necessary build directories!"
+}
+
+print_help() {
+    echo "Available commands: 
+        --all: Build all components (RAN, O1 adapter, and fronthaul interface).
+        --git-update: Update git submodules required for building the RAN. 
+        --dependency: Build and/or install the basic dependencies required for RAN. 
+        --uhd: Build and install UHD v4.4.0 library from source.
+        --xran: Build and install XRAN library from source.
+        --ran: Build RAN for split 7.2,split 8, including CU-UP. 
+        --o1-adapter: Build o1-adapter. 
+        --e2-agent: Build RAN with E2 interface.
+        --install: Install RAN and o1-adapter libraries and binary into $PREFIX var specified in scripts/.env.
+        --uninstall: Uninstall RAN and o1-adapter binary and libraries from $PREFIX var specified in scripts/.env.
+        --clean: clean out the build components from this DIR. Will also remove the submodules. 
+        --help: prints the available commands, nothing special. " 
+    echo_success "Success!"
+}
+
+main() {
+
+    $SUDO echo "[IOS-MCN] Starting the build script..!"
+
+    while [ -n "$1" ]; do
+        case "$1" in
+            --all)
+                # To create build directory, where all the libraries and the executables are copied. 
+                build_dirs
+                build_o1_adapter && build_uhd_from_source && build_xran_from_source && build_install_ran_dependency && build_ran_from_source && build_e2_agent
+                shift ;;
+            --git-update)
+                git_submodule_update
+                shift ;;
+            --dependency)
+		        build_dirs
+                update_dependency 
+                shift ;;
+            --split8)
+                SPLIT8=1
+                shift ;;
+            --uhd)
+		        build_dirs
+                build_uhd_from_source
+                shift ;;
+            --xran)
+                build_dirs
+                build_xran_from_source
+                shift ;;
+            --ran)
+                build_dirs
+                build_ran_from_source
+                shift ;;
+            --o1-adapter)
+                build_dirs
+                build_o1_adapter 
+                shift ;;
+	        --e2-agent)
+                build_dirs
+                build_e2_agent
+		        shift ;;
+            --install)
+                install_files 
+                shift ;;
+            --uninstall)
+                uninstall_files 
+                shift ;;
+            --clean)
+                clean_files
+                exit 0;;
+            -h | --help)
+                print_help
+                exit 0;;
+
+# TODO: add a command that defaults the system and removes the RAN installation, something like a teardown script. - Safwan
+            *)
+                echo "Unknown command. Use '--help or -h' to see available commands." 
+                exit 1;;
+        esac
+    done
+
+    echo "[IOS-MCN] Ending the build script..!"
+
+}
+
+main "$@"

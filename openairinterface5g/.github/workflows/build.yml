@@ -1,0 +1,171 @@
+name: ios-mcn-ran-build
+
+on: 
+  push:
+    tags:
+      - 'v*'  # Triggers only on tags starting with 'v' like v1.0, v2.1.3 etc.
+
+jobs:
+  authcheck:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY:  ${{ github.repository_owner }}/
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Login to ghcr Hub
+        uses: docker/login-action@v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
+      - name: Checkout with submodules
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.GHCRPASS }}  # passes token to allow private submodule access
+
+  ran-base:
+    runs-on: ubuntu-latest  
+    needs: authcheck 
+    env:
+        REGISTRY: ghcr.io
+        DOCKER_REGISTRY: ghcr.io/
+        DOCKER_REPOSITORY: ${{ github.repository_owner }}/
+    steps:
+    - name: Extract tag name
+      run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+    - name: Login to ghcr Hub 
+      uses: docker/login-action@v3.1.0
+      with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+        token: ${{ secrets.GHCRPASS }}
+    - name: Build and push "Dockerfile.base.ubuntu22.iosmcn" Docker image
+      run: |
+        docker build --build-arg GHCRPASS=${{ secrets.GHCRPASS }} -t ghcr.io/${{ github.repository_owner }}/ran-base-dis:${{ env.TAG_NAME }} -f docker/Dockerfile.base.ubuntu22.iosmcn .
+        docker push ghcr.io/${{ github.repository_owner }}/ran-base-dis:${{ env.TAG_NAME }}
+  
+
+  ran-build:
+    runs-on: ubuntu-latest
+    needs: ran-base
+    permissions:
+      contents: read
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY: ${{ github.repository_owner }}/
+    steps:
+      - name: Extract tag name
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.GHCRPASS }}
+
+      - name: Login to ghcr Hub
+        uses: docker/login-action@v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
+
+      - name: Build and push "Dockerfile.build.ubuntu22.iosmcn" Docker image
+        run: |
+          docker build --build-arg DOCKER_REPOSITORY=${{ github.repository_owner }} \
+           --build-arg VERSION=${{ env.TAG_NAME }} \
+           -t ghcr.io/${{ github.repository_owner }}/ran-build-dis:${{ env.TAG_NAME }} -f docker/Dockerfile.build.ubuntu22.iosmcn .
+          docker push ghcr.io/${{ github.repository_owner }}/ran-build-dis:${{ env.TAG_NAME }}
+  ios-mcn-gnb:
+    runs-on: ubuntu-latest
+    needs: ran-build
+    permissions:
+      contents: read
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY: ${{ github.repository_owner }}/
+    steps:
+      - name: Extract tag name
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v3
+
+      - name: Login to ghcr Hub
+        uses: docker/login-action@v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
+
+      - name: Build and push "Dockerfile.gNB.ubuntu22.iosmcn" Docker image
+        run: |
+          docker build --build-arg DOCKER_REPOSITORY=${{ github.repository_owner }} \
+           --build-arg VERSION=${{ env.TAG_NAME }} \
+           -t ghcr.io/${{ github.repository_owner }}/ios-mcn-gnb-dis:${{ env.TAG_NAME }} -f docker/Dockerfile.gNB.ubuntu22.iosmcn .
+          docker push ghcr.io/${{ github.repository_owner }}/ios-mcn-gnb-dis:${{ env.TAG_NAME }}
+    
+  ios-mcn-cuup:
+    runs-on: ubuntu-latest
+    needs: ran-build
+    permissions:
+      contents: read
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY: ${{ github.repository_owner }}/
+    steps:
+      - name: Extract tag name
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v3
+
+      - name: Login to ghcr Hub
+        uses: docker/login-action@v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
+
+      - name: Build and push "Dockerfile.nr-cuup.ubuntu22.iosmcn" Docker image
+        run: |
+          docker build --build-arg DOCKER_REPOSITORY=${{ github.repository_owner }} \
+           --build-arg VERSION=${{ env.TAG_NAME }} \
+           -t ghcr.io/${{ github.repository_owner }}/ios-mcn-cuup-dis:${{ env.TAG_NAME }} -f docker/Dockerfile.nr-cuup.ubuntu22.iosmcn .
+          docker push ghcr.io/${{ github.repository_owner }}/ios-mcn-cuup-dis:${{ env.TAG_NAME }}
+  ios-mcn-nr-ue:
+    runs-on: ubuntu-latest
+    needs: ran-build
+    permissions:
+      contents: read
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY: ${{ github.repository_owner }}/
+    steps:
+      - name: Extract tag name
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v3
+
+      - name: Login to ghcr Hub
+        uses: docker/login-action@v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
+
+      - name: Build and push "Dockerfile.nrUE.ubuntu22.iosmcn" Docker image
+        run: |
+          docker build --build-arg DOCKER_REPOSITORY=${{ github.repository_owner }} \
+           --build-arg VERSION=${{ env.TAG_NAME }} \
+           -t ghcr.io/${{ github.repository_owner }}/ios-mcn-nr-ue-dis:${{ env.TAG_NAME }} -f docker/Dockerfile.nrUE.ubuntu22.iosmcn .
+          docker push ghcr.io/${{ github.repository_owner }}/ios-mcn-nr-ue-dis:${{ env.TAG_NAME }}

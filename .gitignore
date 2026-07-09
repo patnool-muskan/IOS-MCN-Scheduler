@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+cmake_targets/ran_build/
+cmake_targets/log/
+*.o
+*.so
+*.a
+*.ko
+
+# Logs and captures
+*.log
+*.pcap
+*.pcapng
+
+# Editor/OS junk
+.vscode/
+*.swp
+.DS_Store
+
+# Large binaries (adjust if you need to track specific patched binaries)
+*.bin

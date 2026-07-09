@@ -1,0 +1,58 @@
+{
+    "log-level": 3,
+    "software-version": "abcd",
+    "network": {
+        "host": "10.33.42.244",
+        "username": "nr5glab-server",
+        "password": "5glab123",
+        "netconf-port": 830,
+        "sftp-port": 22
+    },
+
+    "ves": {
+        "template": {
+            "new-alarm": "./config/ves-new-alarm.json",
+            "clear-alarm": "./config/ves-clear-alarm.json",
+            "pnf-registration": "./config/ves-pnf-registration.json",
+            "file-ready": "./config/ves-file-ready.json",
+            "heartbeat": "./config/ves-heartbeat.json",
+            "pm-data": "./config/pmData-measData.xml"
+        },
+
+        "pnf-registration": true,
+        "heartbeat-interval": 30,
+
+        "url": "http://10.33.42.246:8080/eventListener/v7",
+        "username": "sample1",
+        "password": "sample1",
+
+        "file-expiry": 86400,
+        "pm-data-interval": 30
+    },
+
+    "alarms": {
+        "internal-connection-lost-timeout": 3,
+
+        "load-downlink-exceeded-warning-threshold": 50,
+        "load-downlink-exceeded-warning-timeout": 30
+    },
+
+    "telnet": {
+        "host": "10.33.42.244",
+        "port": 9090
+    },
+
+    "info": {
+        "gnb-du-id": 0,
+        "gnb-cu-id": 0,
+        "cell-local-id": 0,
+        "node-id": "IOS_MCN-DU-1",
+	    "cu-node-id": "DU-5GNRBox-00001",
+        "location-name": "IOSMCN,Indian Institute of Science,Bengaluru",
+        "managed-by": "ManagementSystem=IOS-MCN",
+        "managed-element-type": "NodeB",
+        "model": "nr-softmodem",
+        "unit-type": "gNB",
+	"cu-unit-type": "CU"
+    }
+}

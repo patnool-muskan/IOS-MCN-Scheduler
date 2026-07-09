@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  gnb_fhi72:
+    image: ghcr.io/ios-mcn-ran/ran-gnb-fhi72-uni:${TAG:-iosmcnmaster}
+    container_name: LPRU-UNI.${TAG:-iosmcnmaster}
+    privileged: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+      - SYS_ADMIN
+    ulimits:
+      core: -1
+    environment:
+      TZ: Asia/Kolkata
+      USE_ADDITIONAL_OPTIONS: >-
+        --sa
+        --thread-pool 3,4,5,6,7
+        --reorder-thread-disable 1
+        --log-config.RRC_dump
+        --log-config.ASN1_debug
+    devices:
+      - /dev/vfio:/dev/vfio
+    volumes:
+      - ../../conf_files/gNB/lpru-siso-100mhz.conf:/opt/oai-gnb/etc/gnb.conf
+      - /dev/hugepages:/dev/hugepages
+      - /tmp:/tmp
+    network_mode: "host"
+    command: >
+      taskset -c 10 /opt/oai-gnb/bin/nr-softmodem
+      -O /opt/oai-gnb/etc/gnb.conf
+    healthcheck:
+      test: /bin/bash -c "ps aux | grep -v grep | grep -c softmodem"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
